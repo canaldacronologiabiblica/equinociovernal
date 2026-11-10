@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terra no Ponto Vernal – ANO AM</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:#04060d;color:#e8ecf5;font-family:system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}
+canvas{display:block;touch-action:none}
+#info{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));left:12px;right:12px;pointer-events:none}
+#info h1{font-size:16px;margin:0 0 3px}
+#info p{margin:2px 0;font-size:12px;color:#aeb8d0}
+#panel{position:absolute;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));max-width:720px;margin:auto;max-height:42vh;overflow:auto;background:rgba(15,20,35,.88);border:1px solid #2a3350;border-radius:12px;padding:10px}
+.r{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.r label{font-size:12px;color:#aeb8d0}
+input[type=range]{flex:1;min-width:120px}
+button{background:#1f2a4a;color:#e8ecf5;border:1px solid #3a4a7a;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer}
+button:hover{background:#2a3a66}
+button.p{background:#6b4e00;border-color:#d9a400}
+</style>
+</head>
+<body>
+<div id="info"><h1>Terra no Ponto Vernal · Equinócio de Março</h1><p id="s1"></p><p id="s2"></p><p>Arraste: girar · roda/pinça: zoom · escala não real</p></div>
+<div id="panel">
+  <div class="r"><button id="play">▶ Play</button><label>Velocidade</label><input id="sp" type="range" min="1" max="365" value="30"><span id="spv" style="font-size:12px"></span></div>
+  <div class="r"><label>Ir ao ano</label><input id="yr" type="number" min="1" max="6020" step="1" value="1" style="width:90px"><label>AM</label><button id="yg" class="p">Saltar</button><span id="ye" style="font-size:12px;color:#ff9a9a"></span></div>
+  <div class="r"><label>Dia do ano</label><input id="dy" type="number" min="0" max="365" step="any" value="0" style="width:80px"><button id="dyg" class="p">Ir ao dia</button><button id="wm">◀ −7 dias</button><button id="dm">◀ −1 dia</button><button id="dp">+1 dia ▶</button><button id="wp">+7 dias ▶</button></div>
+  <div class="r"><label>Órbita</label><input id="sl" type="range" min="0" max="359.9" step="0.1" value="0"><b id="ag" style="font-size:12px"></b></div>
+  <div class="r"><button id="b0">Equinócio março</button><button id="b1">Solstício junho</button><button id="b2">Equinócio setembro</button><button id="b3">Solstício dezembro</button></div>
+  <div class="r"><button id="bv" class="p">Ir ao Ponto Vernal (0°)</button><button id="bl" class="p">1 Volta (+365,24d)</button><button id="br">Reiniciar ANO 01</button><button id="bw">Vista: Sistema</button></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const EPS=23.44*Math.PI/180,R=30,TY=365.2421875,MAXY=6020,MAXTH=(MAXY-1)*360;
+// cálculo exato (frações de 1/128 dia)
+function calc(n){const num=n*46751,whole=Math.floor(num/128),rem=num%128;
+  let ds=String(whole).replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  if(rem)ds+=','+String(rem*78125).padStart(7,'0').replace(/0+$/,'');
+  const c=rem?whole+1:whole;
+  const wd=['Sábado','Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira'][c%7];
+  let s=rem*675+64800;if(s>=86400)s-=86400;const p=x=>String(x).padStart(2,'0');
+  return{ds,wd,t:p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60)};}
+const pad2=n=>String(n).padStart(2,'0');
+function calc2(n,a){const tot=n*TY+TY*a/360,whole=Math.floor(tot+1e-9),fr=Math.max(0,tot-whole);
+  let ds=tot.toFixed(7).replace(/0+$/,'').replace(/\.$/,'');let[i,d]=ds.split('.');i=i.replace(/\B(?=(\d{3})+(?!\d))/g,'.');ds=d?i+','+d:i;
+  const c=fr>1e-9?whole+1:whole;
+  const wd=['Sábado','Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira'][c%7];
+  let s=Math.floor(fr*86400+1e-6)+64800;if(s>=86400)s-=86400;
+  return{ds,wd,t:pad2(Math.floor(s/3600))+':'+pad2(Math.floor(s%3600/60))+':'+pad2(s%60)};}
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x04060d);
+const camera=new THREE.PerspectiveCamera(45,1,0.1,900);
+
+const sp=[];for(let i=0;i<1200;i++){const t=Math.random()*6.283,u=Math.random()*2-1,r=Math.sqrt(1-u*u);sp.push(400*r*Math.cos(t),400*u,400*r*Math.sin(t));}
+const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.Float32BufferAttribute(sp,3));
+scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:1.2})));
+
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(4,32,32),new THREE.MeshBasicMaterial({color:0xffcc33})));
+scene.add(new THREE.PointLight(0xffffff,1.7,0,0));
+scene.add(new THREE.AmbientLight(0x1a2238,0.7));
+
+// plano da eclíptica
+const ecl=new THREE.Mesh(new THREE.CircleGeometry(46,64),new THREE.MeshBasicMaterial({color:0x2a5fff,transparent:true,opacity:0.08,side:THREE.DoubleSide,depthWrite:false}));
+ecl.rotation.x=-Math.PI/2;scene.add(ecl);
+scene.add(new THREE.PolarGridHelper(46,12,4,64,0x4a5a8a,0x2a3350));
+const op=[];for(let i=0;i<=180;i++){const a=i/180*6.2832;op.push(new THREE.Vector3(R*Math.cos(a),0,-R*Math.sin(a)));}
+scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(op),new THREE.LineBasicMaterial({color:0x7aa2ff})));
+
+function textSprite(lines,w,h,cw,ch){const c=document.createElement('canvas');c.width=cw;c.height=ch;
+  const m=new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true});
+  const s=new THREE.Sprite(m);s.scale.set(w,h,1);s.renderOrder=10;s.userData={c,m};return s;}
+function draw(s,lines,border){const c=s.userData.c,g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);
+  g.fillStyle='rgba(8,12,24,.82)';g.strokeStyle=border;g.lineWidth=6;g.beginPath();g.roundRect?g.roundRect(6,6,c.width-12,c.height-12,28):g.rect(6,6,c.width-12,c.height-12);g.fill();g.stroke();
+  g.textAlign='center';g.textBaseline='middle';
+  lines.forEach(l=>{g.fillStyle=l.col;g.font='bold '+l.sz+'px system-ui,Segoe UI,sans-serif';g.fillText(l.t,c.width/2,l.y);});
+  s.userData.m.map.needsUpdate=true;}
+// legenda do ponto vernal
+const legend=textSprite(0,8.4,3.7,1024,450);legend.position.set(R,4.9,0);scene.add(legend);
+// pequenos rótulos das demais estações
+[[0,'PONTO VERNAL (0°)'],[90,'SOLSTÍCIO DE JUNHO'],[180,'EQUINÓCIO DE SETEMBRO'],[270,'SOLSTÍCIO DE DEZEMBRO']].forEach(([d,t])=>{
+  const s=textSprite(0,9,1.3,1024,148);draw(s,[{t,sz:60,y:74,col:'#9fb4e8'}],'#3a4a7a');
+  const a=d*Math.PI/180;s.position.set(R*Math.cos(a),d===0?-2.8:2.6,-R*Math.sin(a));scene.add(s);});
+// marcador do ponto vernal
+const mk=new THREE.Mesh(new THREE.TorusGeometry(2.4,0.05,8,48),new THREE.MeshBasicMaterial({color:0xffd24a}));mk.rotation.x=Math.PI/2;mk.position.set(R,0,0);scene.add(mk);
+
+// textura da Terra
+const c=document.createElement('canvas');c.width=1024;c.height=512;const g=c.getContext('2d');
+const gr=g.createLinearGradient(0,0,0,512);gr.addColorStop(0,'#1d4f8c');gr.addColorStop(.5,'#2a74b8');gr.addColorStop(1,'#1d4f8c');g.fillStyle=gr;g.fillRect(0,0,1024,512);
+g.strokeStyle='rgba(255,255,255,.35)';g.lineWidth=1;
+for(let x=0;x<=1024;x+=1024/12){g.beginPath();g.moveTo(x,0);g.lineTo(x,512);g.stroke();}
+for(let y=0;y<=512;y+=512/6){g.beginPath();g.moveTo(0,y);g.lineTo(1024,y);g.stroke();}
+g.strokeStyle='#ffd24a';g.lineWidth=3;g.beginPath();g.moveTo(0,256);g.lineTo(1024,256);g.stroke();
+g.strokeStyle='#ff6b6b';g.beginPath();g.moveTo(512,0);g.lineTo(512,512);g.stroke();
+
+const pivot=new THREE.Group(),tilt=new THREE.Group();tilt.rotation.x=EPS;
+const spin=new THREE.Mesh(new THREE.SphereGeometry(1.5,48,48),new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(c),roughness:.9}));
+tilt.add(spin);
+tilt.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,-3,0),new THREE.Vector3(0,3,0)]),new THREE.LineBasicMaterial({color:0xff4d4d})));
+const ceq=new THREE.Mesh(new THREE.RingGeometry(2.6,2.7,64),new THREE.MeshBasicMaterial({color:0x33e0ff,side:THREE.DoubleSide}));ceq.rotation.x=Math.PI/2;tilt.add(ceq); // equador celeste
+const ceqd=new THREE.Mesh(new THREE.CircleGeometry(2.6,64),new THREE.MeshBasicMaterial({color:0x33e0ff,transparent:true,opacity:.08,side:THREE.DoubleSide,depthWrite:false}));ceqd.rotation.x=Math.PI/2;tilt.add(ceqd);
+pivot.add(tilt);
+const er=new THREE.Mesh(new THREE.RingGeometry(2.1,2.18,64),new THREE.MeshBasicMaterial({color:0xff9a3c,side:THREE.DoubleSide}));er.rotation.x=Math.PI/2;pivot.add(er); // eclíptica
+scene.add(pivot);
+const ls=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineDashedMaterial({color:0xffcc33,dashSize:.6,gapSize:.4}));scene.add(ls);
+
+// estado
+let th=0,playing=false,speed=30,jump=null,view='earth',yaw=0,pitch=0.35,dE=14,dS=90,lastKey='';
+const year=()=>1+Math.floor(th/360+1e-9),ang=()=>th-(year()-1)*360;
+function update(){
+  const n=year(),a=ang(),r=a*Math.PI/180,ly=a>1e-7?n+1:n;
+  pivot.position.set(R*Math.cos(r),0,-R*Math.sin(r));
+  ls.geometry.setFromPoints([new THREE.Vector3(),pivot.position]);ls.computeLineDistances();
+  const k=calc2(n,a),names={0:'EQUINÓCIO VERNAL',90:'SOLSTÍCIO DE JUNHO',180:'EQUINÓCIO DE SETEMBRO',270:'SOLSTÍCIO DE DEZEMBRO'};
+  const m=[0,90,180,270].find(x=>Math.abs(a-x)<0.05);
+  const title=m!==undefined?names[m]:'POSIÇÃO ORBITAL '+a.toFixed(1).replace('.',',')+'°';
+  const key=title+'|'+n+'|'+k.ds+'|'+k.wd+'|'+k.t;
+  if(key!==lastKey){lastKey=key;
+    draw(legend,[{t:title,sz:m===0?68:54,y:70,col:'#ffd24a'},{t:'ANO '+pad2(ly)+' AM',sz:104,y:170,col:'#ffffff'},{t:k.ds+' DIAS',sz:62,y:268,col:'#c9d6ff'},{t:k.wd+' · '+k.t,sz:58,y:360,col:'#5fe3ff'}],m!==undefined?'#ffd24a':'#4a5a8a');}
+  legend.position.set(pivot.position.x,4.9,pivot.position.z);
+  const tgt=view==='earth'?pivot.position:new THREE.Vector3(),d=view==='earth'?dE:dS;
+  camera.position.copy(tgt).add(new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),Math.cos(yaw)*Math.cos(pitch)).multiplyScalar(d));
+  camera.lookAt(tgt);
+  const dec=Math.asin(Math.sin(EPS)*Math.sin(r))*180/Math.PI;
+  document.getElementById('s1').textContent='ANO '+pad2(ly)+' AM · posição orbital '+a.toFixed(1)+'° · declinação solar '+dec.toFixed(2)+'° · eixo 23,44°';
+  document.getElementById('s2').textContent=Math.abs(dec)<0.3?'Equinócio: Sol sobre o Equador, insolação igual nos dois hemisférios.':(dec>0?'Hemisfério Norte recebe mais insolação.':'Hemisfério Sul recebe mais insolação.');
+  document.getElementById('ag').textContent=a.toFixed(1)+'°';if(document.activeElement!==document.getElementById('yr'))document.getElementById('yr').value=ly;if(document.activeElement!==document.getElementById('dy'))document.getElementById('dy').value=+(a/360*TY).toFixed(2);document.getElementById('sl').value=Math.min(a,359.9);
+}
+function setAng(k){th=(year()-1)*360+k;jump=null;update();}
+function resize(){renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();}
+addEventListener('resize',resize);resize();
+
+const cv=renderer.domElement,pts=new Map();let lx=0,ly=0,pd=0;
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,e);lx=e.clientX;ly=e.clientY;});
+cv.addEventListener('pointerup',e=>{pts.delete(e.pointerId);pd=0;});
+const zoom=f=>{if(view==='earth')dE=Math.min(40,Math.max(4,dE*f));else dS=Math.min(200,Math.max(40,dS*f));update();};
+cv.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return;pts.set(e.pointerId,e);
+  if(pts.size===2){const[p,q]=[...pts.values()],d=Math.hypot(p.clientX-q.clientX,p.clientY-q.clientY);if(pd)zoom(pd/d);pd=d;return;}
+  yaw-=(e.clientX-lx)*0.006;pitch=Math.max(-1.4,Math.min(1.4,pitch+(e.clientY-ly)*0.006));lx=e.clientX;ly=e.clientY;update();});
+cv.addEventListener('wheel',e=>{zoom(1+e.deltaY*0.001);e.preventDefault();},{passive:false});
+
+const $=id=>document.getElementById(id);
+$('play').onclick=()=>{playing=!playing;jump=null;$('play').textContent=playing?'⏸ Pause':'▶ Play';};
+$('sp').oninput=()=>{speed=+$('sp').value;$('spv').textContent=speed+' d/s';};$('spv').textContent='30 d/s';
+$('sl').oninput=()=>setAng(+$('sl').value);
+['b0','b1','b2','b3'].forEach((id,i)=>$(id).onclick=()=>setAng(i*90));
+$('bv').onclick=()=>setAng(0);
+$('br').onclick=()=>{th=0;jump=null;update();};
+$('bl').onclick=()=>{if(year()<MAXY)jump=year()*360;};
+$('bw').onclick=()=>{view=view==='earth'?'sys':'earth';$('bw').textContent='Vista: '+(view==='earth'?'Sistema':'Terra');pitch=view==='earth'?0.35:0.7;yaw=view==='earth'?0:0.3;update();};
+
+function goYear(){const v=Math.round(+$('yr').value),e=$('ye');if(!(v>=1&&v<=MAXY)){e.textContent='Digite de 1 a 6020';return;}e.textContent='';th=(v-1)*360;jump=null;update();}
+$('yg').onclick=goYear;$('yr').onkeydown=e=>{if(e.key==='Enter')goYear();};
+function stepDays(k){const n0=year()-1,d=ang()/360*TY,nd=(k>0?Math.floor(d+1e-6):Math.ceil(d-1e-6))+k;let t;
+  if(nd>=366)t=(n0+1)*360+(nd-366)*360/TY;else if(nd<0)t=n0?(n0-1)*360+(nd+366)*360/TY:0;else t=n0*360+nd*360/TY;
+  th=Math.max(0,Math.min(MAXTH,t));jump=null;playing=false;$('play').textContent='▶ Play';update();}
+function goDay(){const v=+$('dy').value,e=$('ye');if(!(v>=0&&v<TY)){e.textContent='Dia de 0 a 365';return;}e.textContent='';th=(year()-1)*360+v*360/TY;jump=null;update();}
+$('dm').onclick=()=>stepDays(-1);$('dp').onclick=()=>stepDays(1);$('wm').onclick=()=>stepDays(-7);$('wp').onclick=()=>stepDays(7);
+$('dyg').onclick=goDay;$('dy').onkeydown=e=>{if(e.key==='Enter')goDay();};
+let last=performance.now();
+(function loop(now){requestAnimationFrame(loop);const dt=Math.min(0.1,(now-last)/1000);last=now;
+  spin.rotation.y+=0.01;
+  if(jump!==null){th=Math.min(jump,th+300*dt);if(th>=jump){th=jump;jump=null;}update();}
+  else if(playing){th+=speed*360/TY*dt;if(th>=MAXTH){th=MAXTH;playing=false;$('play').textContent='▶ Play';}update();}
+  renderer.render(scene,camera);})(last);
+update();
+</script>
+</body>
+</html>
